@@ -1004,7 +1004,7 @@ class MenuScene extends Phaser.Scene {
 // a calf, once lassoed, is followed by its mother (double points if caught within 8 s).
 const COW_TYPES = {
   normal: { label: '', points: 1, speed: 1 },
-  golden: { label: 'DORADA x3', points: 3, speed: 1.12 },
+  golden: { label: 'DORADA x3', points: 3, speed: 1.18 },
   bull: { label: 'TORO x2', points: 2, speed: 0.95 },
   calf: { label: 'BECERRO', points: 0.5, speed: 0.75 },
   mother: { label: 'MAMA', points: 2, speed: 1.1 },
@@ -1085,7 +1085,7 @@ class Race {
     return this.cow.pos - this.distance;
   }
 
-  // slack widens the lane/range check so a throw is forgiving; the green ring uses none, so it never promises a miss
+  // slack widens the lane/range check so a throw is forgiving; the "¡A TIRO!" hint uses none, so it never promises a miss
   canLasso(slack = 0) {
     const cow = this.cow;
     const gap = this.cowGap();
@@ -1345,8 +1345,8 @@ class Race {
       lane,
       laneX: lane - 1,
       pos, // meters along the track
-      // never above 86% of the horse's top speed, so even a golden cow can be caught with a steady gallop
-      speed: Math.min(Math.min(8.5 + this.level * 1.3, 0.8 * this.maxSpeed()) * COW_TYPES[kind].speed, 0.86 * this.maxSpeed()),
+      // never above 90% of the horse's top speed, so even a golden cow can be caught with a steady gallop
+      speed: Math.min(Math.min(8.5 + this.level * 1.3, 0.8 * this.maxSpeed()) * COW_TYPES[kind].speed, 0.9 * this.maxSpeed()),
       stride: 0, // advances while running, drives the leg animation
       caughtTimer: 0,
       laneTimer: randomBetween(1, 2.5), // time until the next voluntary lane change
@@ -2012,10 +2012,6 @@ class ChaseScene extends Phaser.Scene {
     const isBull = cow.type === 'bull';
     const sizeFactor = isBull ? 1.25 : cow.type === 'calf' ? 0.65 : 1;
     const struggling = cow.caughtTimer > 0;
-    if (race.canLasso()) {
-      this.overlay.lineStyle(3, 0x7aff9a, 0.55 + 0.45 * Math.sin(this.elapsed * 12)).strokeEllipse(x, y - 22 * scale, 90 * scale, 60 * scale);
-    }
-
     // jump arc while crossing a lagoon: 0 on the ground, 1 at the peak
     const lagoon = race.obstacles.find((o) => o.kind === 'lagoon' && o.lane === cow.lane && Math.abs(o.pos - cow.pos) < 3.2);
     const jump = lagoon ? Math.sin(Math.PI * (1 - (lagoon.pos - cow.pos + 3.2) / 6.4)) : 0;
