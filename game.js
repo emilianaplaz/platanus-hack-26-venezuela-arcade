@@ -1004,7 +1004,7 @@ class MenuScene extends Phaser.Scene {
 // a calf, once lassoed, is followed by its mother (double points if caught within 8 s).
 const COW_TYPES = {
   normal: { label: '', points: 1, speed: 1 },
-  golden: { label: 'DORADA x3', points: 3, speed: 1.25 },
+  golden: { label: 'DORADA x3', points: 3, speed: 1.12 },
   bull: { label: 'TORO x2', points: 2, speed: 0.95 },
   calf: { label: 'BECERRO', points: 0.5, speed: 0.75 },
   mother: { label: 'MAMA', points: 2, speed: 1.1 },
@@ -1345,7 +1345,8 @@ class Race {
       lane,
       laneX: lane - 1,
       pos, // meters along the track
-      speed: Math.min(8.5 + this.level * 1.3, 0.8 * this.maxSpeed()) * COW_TYPES[kind].speed,
+      // never above 86% of the horse's top speed, so even a golden cow can be caught with a steady gallop
+      speed: Math.min(Math.min(8.5 + this.level * 1.3, 0.8 * this.maxSpeed()) * COW_TYPES[kind].speed, 0.86 * this.maxSpeed()),
       stride: 0, // advances while running, drives the leg animation
       caughtTimer: 0,
       laneTimer: randomBetween(1, 2.5), // time until the next voluntary lane change
@@ -1576,8 +1577,10 @@ class ChaseScene extends Phaser.Scene {
     this.add.image(this.left + 6, 18, 'cow0').setScale(1.6 * this.uiScale).setDepth(301);
     this.hudText = this.makeText(this.left + 26 * this.uiScale, 9, '', FONT_MONO, 15, UI_CREAM).setDepth(300);
     this.musicText = this.makeText(GAME_WIDTH - 12, 8, '', FONT_MONO, 14, UI_CREAM).setOrigin(1, 0).setDepth(300);
-    this.bannerText = this.makeText(GAME_WIDTH / 2, 300, '', FONT_PIXEL, 14, '#ff9a6a', { align: 'center', ...this.textBox() }).setOrigin(0.5).setDepth(305);
-    this.hintText = this.makeText(GAME_WIDTH / 2, 400, '', FONT_PIXEL, 13, '#ffe08a', { align: 'center', ...this.textBox() }).setOrigin(0.5).setDepth(305);
+    // notices and hints sit in the sky so they never cover the cow or the obstacles coming down the road
+    this.bannerText = this.makeText(GAME_WIDTH / 2, 80, '', FONT_PIXEL, 13, '#ff9a6a', { align: 'center', ...this.textBox() }).setOrigin(0.5).setDepth(305);
+    this.hintText = this.makeText(GAME_WIDTH / 2, 128, '', FONT_PIXEL, 12, '#ffe08a', { align: 'center', ...this.textBox() }).setOrigin(0.5).setDepth(305);
+    this.rhythmText = this.makeText(this.left, GAME_HEIGHT - 34 * this.uiScale, '', FONT_PIXEL, 10, UI_CREAM).setOrigin(0, 1).setDepth(300);
     this.cowLabel = this.makeText(0, 0, '', FONT_PIXEL, 9, '#ffe14d').setOrigin(0.5, 1).setDepth(281);
     this.endText = this.makeText(GAME_WIDTH / 2, GAME_HEIGHT / 2, '', FONT_PIXEL, 15, UI_CREAM, { align: 'center', lineSpacing: 12, backgroundColor: 'rgba(42,18,8,0.88)', padding: { x: 24, y: 20 } })
       .setOrigin(0.5)
@@ -1700,7 +1703,7 @@ class ChaseScene extends Phaser.Scene {
   }
 
   showLevelBanner(level) {
-    const banner = this.makeText(GAME_WIDTH + 200, 200, 'NIVEL ' + level + '\nvaca mas rapida', FONT_PIXEL, 18, UI_CREAM, { align: 'center', backgroundColor: 'rgba(42,18,8,0.78)', padding: { x: 20, y: 12 } })
+    const banner = this.makeText(GAME_WIDTH + 200, 80, 'NIVEL ' + level + '\nvaca mas rapida', FONT_PIXEL, 18, UI_CREAM, { align: 'center', backgroundColor: 'rgba(42,18,8,0.78)', padding: { x: 20, y: 12 } })
       .setOrigin(0.5)
       .setDepth(290);
     this.tweens.add({ targets: banner, x: GAME_WIDTH / 2, duration: 350, ease: 'Back.easeOut' });
@@ -2195,7 +2198,7 @@ class ChaseScene extends Phaser.Scene {
     }
   }
 
-  // Top panel, escape meter, rhythm dots and the speed meter.
+  // Top panel, escape meter and the speed meter.
   drawBars() {
     const race = this.race;
     const overlay = this.overlay;
@@ -2205,10 +2208,6 @@ class ChaseScene extends Phaser.Scene {
     if (race.escapeTimer > 0 || race.cowGap() > ESCAPE_DISTANCE) {
       drawMeter(overlay, GAME_WIDTH / 2 - 120, 40, 240, 14, race.escapeTimer / ESCAPE_SECONDS, 0xff4a5a);
     }
-    race.tapQuality.forEach((quality, i) => {
-      const color = quality >= 1 ? 0xffd166 : quality > 0.55 ? 0xff8c3a : 0xff4a5a;
-      overlay.fillStyle(color, 0.4 + i * 0.1).fillCircle(this.left + 8 + i * 18 * scale, GAME_HEIGHT - 60 * scale, 5 * scale);
-    });
     const speedFraction = race.speed / race.maxSpeed();
     const speedColor = race.fallTimer > 0 ? 0xff4a5a : speedFraction > 0.85 ? 0x7aff9a : 0xffc04a;
     drawMeter(overlay, this.left, GAME_HEIGHT - 28 * scale, 160 * scale, 12 * scale, speedFraction, speedColor);
@@ -2234,6 +2233,14 @@ class ChaseScene extends Phaser.Scene {
       }
     }
     this.bannerText.setText(banner).setVisible(!!banner);
+
+    // feedback on the last gallop press, over the speed meter; a press after a long pause is a fresh start, not "slow"
+    const quality = race.tapQuality[race.tapQuality.length - 1];
+    const showRhythm = !this.isGameOver && race.fallTimer <= 0 && quality && race.time - race.lastTapTime < 1 && race.tapIntervals[race.tapIntervals.length - 1] < 1.2;
+    this.rhythmText
+      .setText(quality >= 1 ? 'GALOPE: BUEN RITMO' : quality > 0.55 ? 'GALOPE: MUY LENTO' : 'GALOPE: ¡MUY RAPIDO!')
+      .setColor(quality >= 1 ? '#ffd166' : quality > 0.55 ? '#ff8c3a' : '#ff4a5a')
+      .setVisible(!!showRhythm);
     const hint = this.isGameOver ? '' : race.hint();
     this.hintText.setText(hint).setVisible(!!hint).setAlpha(0.75 + 0.25 * Math.sin(this.elapsed * 6));
   }
