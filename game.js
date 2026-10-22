@@ -16,7 +16,8 @@ const CENTER_X = 400;
 const ESCAPE_DISTANCE = 45;
 const ESCAPE_SECONDS = 6;
 const MIN_COW_GAP = 7; // closest the horse can get: right behind the cow, sprites just touching
-const LASSO_MAX_RANGE = 18;
+const LASSO_MAX_RANGE = 11;
+const LASSO_REACH = 12; // the rope itself carries farther than the ring promises, so a visible touch always catches
 const TRIP_AVERAGE_INTERVAL = 0.19; // average gap between the last 4 presses that trips the horse
 const FALL_SECONDS = 1.3;
 
@@ -609,7 +610,8 @@ const SPRITES = {
   bush:['.....gggg.....','...gggoggggg..','..ggGgggggGg..','.ggogggGgggog.','.gGggggggggGg.','.gggggGgogggg.','..ggGggggggg..','...gggggggg...','....dd..dd....'],
   toro:['ww..........ww','.wwddddddddww.','...dddkkddd...','..dddddddddd..','.dddddddddddd.','.dddddddddddd.','.dddddddddddd.','.dddddddddddd.','.dddddddddddd.','..dddddddddd..','..dddddddddd..','...kk....kk...','...kk....kk...','...kk....kk...'],
   log:['.FFFFFFFFFFFFFFFFFF.','FffffffffffffffffffF','FffFfffffffFfffffffF','FffffffffffffffffffF','.FFFFFFFFFFFFFFFFFF.','..dd..........dd....'],
-  chig:['..bbbbbb..','.bbbbbbbb.','bbkbbbbbbb','bbbbbbbbbb','.bb....bb.','.dd....dd.'],
+  // capybara in profile, facing right: barrel body, blunt snout, small ear, pale belly
+  chig:['..dddddddd....','.dbbbbbbbbd.dd','dbbbbbbbbbbbbb','dbbbbbbbbbbkbb','bbbbbbbbbbbbbk','hhbbbbbbbbbbbb','.hhhhhhhhhbbb.','..dd.dd..dd.d.','..dd.dd..dd.d.'],
   hat:['..yyyy..','yyeeeeyy','yyyyyyyy'],
   palm:['....g..g..g.....','..gg.gggg.gg....','.ggggggggggggg..','gg..ggggggg..gg.','....gg.gg.gg....','.....g.dd.g.....','.......dd.......','.......dd.......','.......dd.......','......dd........','......dd........','......dd........','.....dd.........','.....dd.........','.....dd.........','....ddd.........'],
   tuft:['.g..G..g.','gG.gGg.Gg','.GgGGGgG.'],
@@ -801,7 +803,7 @@ const MENU_LINES_TOP = 268;
 const MENU_LINES = [
   'B1: galopar a ritmo (muy rapido = caida)',
   'Joystick izq/der: cambiar de carril',
-  'B2: lanzar el lazo (vaca en tu carril, 7-18 m)',
+  'B2: lanzar el lazo (vaca en tu carril, 7-11 m)',
   'Joystick arriba (W): saltar (menos las cercas)',
   'Si la vaca se aleja mas de 40 m, se escapa',
   'JUGADORA 2: flechas, R galopa, T lazo',
@@ -1004,7 +1006,7 @@ class MenuScene extends Phaser.Scene {
 // a calf, once lassoed, is followed by its mother (double points if caught within 8 s).
 const COW_TYPES = {
   normal: { label: '', points: 1, speed: 1 },
-  golden: { label: 'DORADA x3', points: 3, speed: 1.18 },
+  golden: { label: 'DORADA x3', points: 3, speed: 1.1 },
   bull: { label: 'TORO x2', points: 2, speed: 0.95 },
   calf: { label: 'BECERRO', points: 0.5, speed: 0.75 },
   mother: { label: 'MAMA', points: 2, speed: 1.1 },
@@ -1014,7 +1016,7 @@ const FALL_MESSAGES = {
   fence: '¡CHOCASTE LA CERCA!',
   bush: '¡CHOCASTE UN CHAPARRO!',
   log: '¡CHOCASTE EL TRONCO!',
-  ditch: '¡CAISTE EN LA ZANJA!',
+  hedge: '¡CHOCASTE UN SETO!',
   herd: '¡CHOCASTE CON LOS CHIGUIRES!',
 };
 
@@ -1023,7 +1025,7 @@ const coleoScores = [0, 0]; // each split-screen player's points, so both can se
 
 // One player's chase: the rider, the cow, the obstacles and the weather.
 // Obstacle kinds: fence and bush knock the horse down, a lagoon slows it, a log must be dodged or jumped,
-// a ditch (two lanes wide) and a herd of capybaras crossing the road must be jumped or waited out.
+// a hedge of bushes (two or three lanes wide) and a herd of capybaras crossing the road must be jumped or waited out.
 class Race {
   constructor(pad, coleo, keys) {
     this.pad = pad;
@@ -1059,7 +1061,7 @@ class Race {
     this.notice = '';
     this.noticeTimer = 0;
 
-    this.lasso = { timer: 0, cooldown: 0, hit: false };
+    this.lasso = { timer: 0, cooldown: 0, hit: false, pending: false, lock: false };
     this.lassoBuffer = 0; // a press just before the lasso is ready still counts
     this.hints = {};
 
@@ -1087,11 +1089,22 @@ class Race {
 
   // slack widens the lane/range check so a throw is forgiving; the "¡A TIRO!" hint uses none, so it never promises a miss
   canLasso(slack = 0) {
+    const lasso = this.lasso;
+    return this.fallTimer <= 0 && lasso.cooldown <= 0 && lasso.timer <= 0 && this.cowReachable(slack);
+  }
+
+  // slack 0 is the strict rule behind the green ring; a throw instead catches whenever the rope visibly touches the cow
+  cowReachable(slack = 0) {
     const cow = this.cow;
     const gap = this.cowGap();
-    const lasso = this.lasso;
-    const ready = this.fallTimer <= 0 && lasso.cooldown <= 0 && lasso.timer <= 0;
-    return ready && cow.caughtTimer <= 0 && !cow.charge && Math.abs(cow.laneX - this.laneX) < 0.5 + slack * 0.2 && gap >= MIN_COW_GAP - 0.1 && gap <= LASSO_MAX_RANGE + slack * 2;
+    if (cow.caughtTimer > 0 || cow.charge) {
+      return false;
+    }
+    // a cow in another lane is never reachable; slack only forgives the distance
+    if (cow.lane !== this.lane || Math.abs(cow.laneX - this.laneX) >= 0.5) {
+      return false;
+    }
+    return gap <= (slack ? LASSO_REACH : LASSO_MAX_RANGE);
   }
 
   notify(message) {
@@ -1105,20 +1118,20 @@ class Race {
     if (obstacle.kind === 'herd') {
       return obstacle.x - 1;
     }
-    return obstacle.kind === 'ditch' ? obstacle.lane - 0.5 : obstacle.lane - 1;
+    return obstacle.kind === 'hedge' ? obstacle.lane - 1 + (obstacle.span - 1) / 2 : obstacle.lane - 1;
   }
 
   hits(obstacle) {
     const ahead = obstacle.pos - this.distance;
-    if (obstacle.kind === 'ditch') {
-      return ahead > -1.2 && ahead < 1 && Math.abs(this.laneX - (obstacle.lane - 0.5)) < 1;
+    if (obstacle.kind === 'hedge') {
+      return ahead > -1.2 && ahead < 1 && Math.abs(this.laneX - this.obstacleLaneX(obstacle)) < obstacle.span / 2;
     }
     return ahead > -0.6 && ahead < 0.8 && Math.abs(this.laneX - this.obstacleLaneX(obstacle)) < 0.5;
   }
 
   isBlocked(lane, fromPos, toPos) {
     return this.obstacles.some(
-      (o) => o.kind !== 'lagoon' && o.kind !== 'herd' && (o.lane === lane || (o.kind === 'ditch' && o.lane + 1 === lane)) && o.pos >= fromPos && o.pos <= toPos,
+      (o) => o.kind !== 'lagoon' && o.kind !== 'herd' && (lane >= o.lane && lane < o.lane + (o.span || 1)) && o.pos >= fromPos && o.pos <= toPos,
     );
   }
 
@@ -1128,17 +1141,18 @@ class Race {
     const lanes = (recentLanes.length >= 2 ? recentLanes : [0, 1, 2]).sort(() => Math.random() - 0.5);
     const add = (kind, lane, extra) => this.obstacles.push({ kind, lane, pos, hit: false, ...extra });
 
-    const pool = ['ditch', 'herd', 'log', 'log', 'fence', 'fence', 'bush', 'lagoon'];
+    const pool = ['hedge', 'herd', 'log', 'log', 'fence', 'fence', 'bush', 'lagoon'];
     let kind = pool[Math.floor(randomBetween(0, pool.length))];
-    if (kind === 'ditch' && (this.level < 2 || recentLanes.length)) {
+    if (kind === 'hedge' && (this.level < 2 || recentLanes.length)) {
       kind = 'fence';
     }
     if (kind === 'herd' && this.level < 3) {
       kind = 'log';
     }
 
-    if (kind === 'ditch') {
-      add('ditch', Math.floor(randomBetween(0, 2)));
+    if (kind === 'hedge') {
+      const span = this.level >= 4 && Math.random() < 0.35 ? 3 : 2;
+      add('hedge', Math.floor(randomBetween(0, 4 - span)), { span });
     } else if (kind === 'herd') {
       const fromLeft = Math.random() < 0.5;
       add('herd', 1, { x: fromLeft ? -0.6 : 2.6, dir: fromLeft ? 1 : -1 });
@@ -1223,7 +1237,7 @@ class Race {
       }
       obstacle.hit = true;
       if (this.jumpHeight > 0 && obstacle.kind !== 'fence') {
-        continue; // airborne: bushes, logs, ditches, capybaras and lagoons are cleared, but never a fence
+        continue; // airborne: bushes, logs, hedges, capybaras and lagoons are cleared, but never a fence
       }
       if (obstacle.kind === 'lagoon') {
         this.slowTimer = 1;
@@ -1243,6 +1257,17 @@ class Race {
     const cow = this.cow;
     lasso.cooldown = Math.max(0, lasso.cooldown - dt);
     lasso.timer = Math.max(0, lasso.timer - dt);
+    if (lasso.pending && lasso.timer <= 0.25) {
+      // the rope lands now: the cow may have moved since the throw, so judge the contact itself
+      lasso.pending = false;
+      if (cow.lane !== this.lane || (!lasso.lock && !this.cowReachable(1))) {
+        this.missLasso();
+      } else {
+        lasso.hit = true;
+        lasso.cooldown = 0.6;
+        this.catchCow();
+      }
+    }
     this.lassoBuffer = Math.max(0, this.lassoBuffer - dt);
     if (pressed) {
       this.lassoBuffer = 0.2;
@@ -1251,15 +1276,17 @@ class Race {
       return;
     }
     this.lassoBuffer = 0;
-    lasso.hit = this.canLasso(1); // must be checked before the timer starts, since canLasso requires an idle lasso
+    lasso.hit = false;
+    lasso.lock = this.cowReachable(1); // aimed true: a lane change by the cow mid-flight can't turn it into a miss
     lasso.timer = 0.7;
-    lasso.cooldown = lasso.hit ? 0.6 : 1.3;
+    lasso.cooldown = 1.3;
+    lasso.pending = true; // hit or miss is decided when the rope lands, so the cow never reacts before it does
     setTimeout(() => playSound('lasso'), 140);
-    if (lasso.hit) {
-      this.catchCow();
-      return;
-    }
-    setTimeout(() => playSound('miss'), 450);
+  }
+
+  missLasso() {
+    const cow = this.cow;
+    setTimeout(() => playSound('miss'), 0);
     // missing a bull that is close makes it charge
     if (cow.type === 'bull' && !cow.charge && this.cowGap() < 16 && Math.abs(cow.laneX - this.laneX) < 0.6) {
       cow.charge = { timer: 1.6 };
@@ -1346,7 +1373,7 @@ class Race {
       laneX: lane - 1,
       pos, // meters along the track
       // never above 90% of the horse's top speed, so even a golden cow can be caught with a steady gallop
-      speed: Math.min(Math.min(8.5 + this.level * 1.3, 0.8 * this.maxSpeed()) * COW_TYPES[kind].speed, 0.9 * this.maxSpeed()),
+      speed: Math.min(Math.min(8.5 + this.level * 1, 0.75 * this.maxSpeed()) * COW_TYPES[kind].speed, 0.85 * this.maxSpeed()),
       stride: 0, // advances while running, drives the leg animation
       caughtTimer: 0,
       laneTimer: randomBetween(1, 2.5), // time until the next voluntary lane change
@@ -1429,7 +1456,7 @@ class Race {
     const overLagoon = this.obstacles.some((o) => o.kind === 'lagoon' && o.lane === cow.lane && Math.abs(o.pos - cow.pos) < 5);
 
     // while a lagoon is near the cow stays in its lane so it can jump over it
-    const wantsToMove = blockedNow || (!overLagoon && (cow.laneTimer <= 0 || (lassoThreatens && Math.random() < dt * Math.min(2.5, 0.4 + 0.3 * this.level))));
+    const wantsToMove = blockedNow || (!overLagoon && (cow.laneTimer <= 0 || (lassoThreatens && Math.random() < dt * Math.min(1.5, 0.3 + 0.12 * this.level))));
     if (!wantsToMove) {
       return;
     }
@@ -1443,7 +1470,7 @@ class Race {
     }
     if (candidates.length && (blockedNow || Math.random() < 0.6)) {
       cow.lane = candidates[Math.floor(randomBetween(0, candidates.length))];
-      cow.laneTimer = randomBetween(1, 3) / Math.sqrt(this.level);
+      cow.laneTimer = randomBetween(1, 3) / (1 + 0.2 * (this.level - 1));
     } else if (!blockedNow) {
       cow.laneTimer = randomBetween(0.6, 1.5);
     }
@@ -1507,7 +1534,7 @@ class Race {
     }
     hints.lasso = hints.lasso || this.lasso.timer > 0 || this.cowsCaught > 0;
     hints.jump = hints.jump || this.jumpHeight > 0;
-    const threat = this.obstacles.find((o) => !o.hit && o.kind !== 'lagoon' && o.pos - this.distance > 0 && o.pos - this.distance < 40 && Math.abs(this.laneX - this.obstacleLaneX(o)) < (o.kind === 'ditch' ? 1 : 0.5));
+    const threat = this.obstacles.find((o) => !o.hit && o.kind !== 'lagoon' && o.pos - this.distance > 0 && o.pos - this.distance < 40 && Math.abs(this.laneX - this.obstacleLaneX(o)) < (o.kind === 'hedge' ? o.span / 2 : 0.5));
     const teach = (name, frames) => {
       hints[name + 'Frames'] = (hints[name + 'Frames'] || 0) + 1;
       hints[name] = hints[name + 'Frames'] > frames;
@@ -1939,22 +1966,17 @@ class ChaseScene extends Phaser.Scene {
 
       if (obstacle.kind === 'lagoon') {
         this.drawLagoon(obstacle, z, scale, y, depth, alpha);
-      } else if (obstacle.kind === 'ditch') {
-        const x0 = this.screenX(obstacle.lane - 1.5, z);
-        const x1 = this.screenX(obstacle.lane + 0.5, z);
-        const farY = this.screenY(z + 1.2);
-        const x0Far = this.screenX(obstacle.lane - 1.5, z + 1.2);
-        const x1Far = this.screenX(obstacle.lane + 0.5, z + 1.2);
-        world.fillStyle(0x3a2a14, alpha);
-        world.beginPath();
-        world.moveTo(x0, y);
-        world.lineTo(x1, y);
-        world.lineTo(x1Far, farY);
-        world.lineTo(x0Far, farY);
-        world.closePath();
-        world.fillPath();
-        world.fillStyle(0x6b4a2b, 0.8 * alpha).fillRect(x0, y - 2 * scale, x1 - x0, 3 * scale);
-        world.fillStyle(0x2b6fa8, 0.7 * alpha).fillRect(x0Far + (x0 - x0Far) * 0.3, farY - (farY - y) * 0.35, (x1Far - x0Far) * 0.7, (farY - y) * 0.25);
+      } else if (obstacle.kind === 'hedge') {
+        let group = this.obstacleImages.get(obstacle);
+        if (!group) {
+          group = Array.from({ length: obstacle.span }, () => this.add.image(0, 0, 'bush').setOrigin(0.5, 1));
+          this.obstacleImages.set(obstacle, group);
+        }
+        group.forEach((image, k) => {
+          const x = this.screenX(obstacle.lane - 1 + k, z);
+          world.fillStyle(0x3a2610, 0.22 * alpha).fillEllipse(x, y, 90 * scale, 20 * scale);
+          image.setPosition(x, y).setScale(Math.max(1.3, 6 * scale)).setDepth(depth).setAlpha(alpha);
+        });
       } else if (obstacle.kind === 'herd') {
         let group = this.obstacleImages.get(obstacle);
         if (!group) {
@@ -1962,9 +1984,13 @@ class ChaseScene extends Phaser.Scene {
           this.obstacleImages.set(obstacle, group);
         }
         group.forEach((image, k) => {
+          const gx = this.screenX(obstacle.x - 1 + (k - 1) * 0.28, z);
+          const gy = y - (k % 2) * 3 * scale;
+          const size = k === 2 ? 2.1 : 3.2; // the last one is a pup
+          world.fillStyle(0x3a2610, 0.25 * alpha).fillEllipse(gx, gy, 14 * size * scale, 12 * scale);
           image
-            .setPosition(this.screenX(obstacle.x - 1 + (k - 1) * 0.28, z), y - (k % 2) * 3 * scale)
-            .setScale(4 * scale)
+            .setPosition(gx, gy)
+            .setScale(size * scale)
             .setDepth(depth + k * 0.1)
             .setAlpha(alpha)
             .setFlipX(obstacle.dir < 0);
@@ -2117,12 +2143,12 @@ class ChaseScene extends Phaser.Scene {
     let targetX;
     let targetY;
     let radius;
-    if (lasso.hit) {
+    if (lasso.hit || (lasso.pending && race.cow.lane === race.lane && (lasso.lock || race.cowReachable(1)))) {
       targetX = cowX;
       targetY = cowY - 28 * cowScale;
       radius = Math.max(10, 22 * cowScale);
     } else {
-      const missZ = gap > LASSO_MAX_RANGE ? LASSO_MAX_RANGE * 0.7 : Math.max(4, gap);
+      const missZ = Math.max(4, Math.min(gap, LASSO_REACH));
       targetX = this.screenX(race.laneX, missZ);
       targetY = this.screenY(missZ) - 6;
       radius = Math.max(8, 20 * this.scaleAt(missZ));
