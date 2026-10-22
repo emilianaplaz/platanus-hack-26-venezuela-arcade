@@ -13,8 +13,8 @@ const SONG_KEY = 'song_v2'; // new key so everyone starts on the song
 const CENTER_X = 400;
 
 // Chase rules
-const ESCAPE_DISTANCE = 45;
-const ESCAPE_SECONDS = 6;
+const ESCAPE_START = 28; // beyond this gap the cow starts pulling away for good
+const ESCAPE_DISTANCE = 40; // the cow escapes the moment the gap reaches this
 const MIN_COW_GAP = 7; // closest the horse can get: right behind the cow, sprites just touching
 const LASSO_MAX_RANGE = 11;
 const LASSO_REACH = 12; // the rope itself carries farther than the ring promises, so a visible touch always catches
@@ -1067,7 +1067,7 @@ class Race {
 
     this.obstacles = [];
     this.nextObstaclePos = 30;
-    this.escapeTimer = 0;
+    this.escape = 0; // 0..1, how close the gap is to ESCAPE_DISTANCE
     this.warnTimer = 0;
     this.weather = { type: null, timer: 0, next: 30 + randomBetween(0, 15) };
     this.effects = { caught: 0, fall: false, splash: false }; // one-shot events for the scene to react to
@@ -1416,7 +1416,7 @@ class Race {
   chaseCow(dt) {
     const cow = this.cow;
     const gap = this.cowGap();
-    cow.tired = gap > 28 ? Math.max(0.3, 1 - (gap - 28) / 30) : 1; // slows down when far ahead
+    cow.tired = 1; // never slows down, however far ahead it is
     cow.warmupLeft = Math.max(0, cow.warmupLeft - dt);
     const warmup = this.started ? (cow.warmupLeft > 0 ? cow.warmupStart + (1 - cow.warmupStart) * (1 - cow.warmupLeft / 2) : 1) : 0.15;
     cow.pos = Math.max(this.distance + MIN_COW_GAP, cow.pos + cow.speed * cow.tired * warmup * dt);
@@ -1424,16 +1424,17 @@ class Race {
     cow.laneTimer -= dt;
     this.chooseCowLane(dt, gap);
 
-    if (gap > ESCAPE_DISTANCE && this.started) {
-      this.escapeTimer += dt;
+    // escape depends only on how far ahead the cow is, so time spent down or slow can't be shaken off
+    this.escape = Math.min(1, Math.max(0, (gap - ESCAPE_START) / (ESCAPE_DISTANCE - ESCAPE_START)));
+    if (this.escape > 0 && this.started) {
       this.warnTimer -= dt;
       if (this.warnTimer <= 0) {
         this.warnTimer = 0.5;
         playSound('warn');
       }
-      if (this.escapeTimer >= ESCAPE_SECONDS) {
+      if (this.escape >= 1) {
         if (this.coleo) {
-          this.escapeTimer = 0;
+          this.escape = 0;
           this.cow = this.createCow(26);
           this.notify('¡SE ESCAPO! VIENE OTRA');
         } else {
@@ -1441,8 +1442,6 @@ class Race {
           playSound('over');
         }
       }
-    } else {
-      this.escapeTimer = Math.max(0, this.escapeTimer - dt * 0.7);
     }
   }
 
@@ -2065,7 +2064,7 @@ class ChaseScene extends Phaser.Scene {
     if (!struggling && gap > 15) {
       // an arrow above a far cow: yellow when close, pink when about to escape
       const arrowY = y - 70 * scale - 70 + Math.sin(this.elapsed * 6) * 5;
-      const color = gap > ESCAPE_DISTANCE ? 0xff3d81 : 0xffe14d;
+      const color = gap > ESCAPE_START ? 0xff3d81 : 0xffe14d;
       overlay.fillStyle(color, 0.95).fillTriangle(x - 9, arrowY - 14, x + 9, arrowY - 14, x, arrowY);
       overlay.lineStyle(1, color, 0.5).lineBetween(x, arrowY, x, y - 62 * scale);
     }
@@ -2227,8 +2226,8 @@ class ChaseScene extends Phaser.Scene {
     const scale = this.uiScale;
     drawPanel(overlay, 6, 3, GAME_WIDTH - 12, 30, 0.55);
 
-    if (race.escapeTimer > 0 || race.cowGap() > ESCAPE_DISTANCE) {
-      drawMeter(overlay, GAME_WIDTH / 2 - 120, 40, 240, 14, race.escapeTimer / ESCAPE_SECONDS, 0xff4a5a);
+    if (race.escape > 0) {
+      drawMeter(overlay, GAME_WIDTH / 2 - 120, 40, 240, 14, race.escape, 0xff4a5a);
     }
     const speedFraction = race.speed / race.maxSpeed();
     const speedColor = race.fallTimer > 0 ? 0xff4a5a : speedFraction > 0.85 ? 0x7aff9a : 0xffc04a;
@@ -2250,7 +2249,7 @@ class ChaseScene extends Phaser.Scene {
         banner = race.notice;
       } else if (race.bannerTimer > 0) {
         banner = race.banner;
-      } else if (gap > ESCAPE_DISTANCE && race.started) {
+      } else if (gap > ESCAPE_START && race.started) {
         banner = '¡SE ESCAPA! ACERCATE';
       }
     }
